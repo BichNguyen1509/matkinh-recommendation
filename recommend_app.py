@@ -3,7 +3,7 @@ import streamlit as st
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import folium
-from streamlit_folium import folium_static
+from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 import unicodedata
 import re
@@ -20,20 +20,40 @@ df_sku.columns = df_sku.columns.str.strip()
 df_sku['Price'] = df_sku['Price'].astype(float)
 
 # ----------------- Giao diện người dùng -----------------
-st.set_page_config(page_title="Đề xuất cửa hàng mắt kính", layout="centered")
+st.set_page_config(page_title="Đề xuất cửa hàng mắt kính", layout="wide")
 
 st.markdown("<h1 style='text-align: center; color: #4CAF50;'>🕶️ Gợi ý cửa hàng mắt kính</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center;'>Tìm cửa hàng gần bạn nhất với nhiều sản phẩm trong tầm giá</p>", unsafe_allow_html=True)
 st.markdown("---")
 
-# --- Nhập thông tin ---
-st.markdown("### 📍 Nhập thông tin")
-min_price = st.number_input("Ngân sách tối thiểu (VND)", value=500000, step=50000, format="%d")
-max_price = st.number_input("Ngân sách tối đa (VND)", value=1000000, step=50000, format="%d")
-user_address = st.text_input("Địa chỉ hiện tại của bạn:", value="72 Lê Thánh Tôn, Quận 1, TP.HCM")
+# ----------------- Tạo 2 cột giao diện song song -----------------
+col1, spacer, col2 = st.columns([1.3, 0.2, 1.3])  # spacer để tạo khoảng cách
 
-st.caption(f"💰 Ngân sách bạn chọn: **{min_price:,} VND** đến **{max_price:,} VND**")
-st.markdown("<br>", unsafe_allow_html=True)
+with col1:
+    st.markdown("### 📍 Nhập thông tin")
+    min_price = st.number_input("Ngân sách tối thiểu (VND)", value=500000, step=50000, format="%d")
+    max_price = st.number_input("Ngân sách tối đa (VND)", value=1000000, step=50000, format="%d")
+    user_address = st.text_input("Địa chỉ hiện tại của bạn:", value="72 Lê Thánh Tôn, Quận 1, TP.HCM")
+    st.caption(f"💰 Ngân sách bạn chọn: **{min_price:,} VND** đến **{max_price:,} VND**")
+
+with col2:
+    st.markdown("### 📂 Bộ lọc nâng cao")
+    selected_colors = st.multiselect("🎨 Màu sắc", options=df_sku["Color"].dropna().unique())
+    selected_types = st.multiselect("👓 Kiểu dáng", options=df_sku["Type"].dropna().unique())
+    selected_brands = st.multiselect("🏷️ Thương hiệu", options=df_sku["Brand"].dropna().unique())
+    selected_gender = st.selectbox("🧍 Giới tính", options=["Tất cả"] + list(df_sku["Giới tính"].dropna().unique()))
+
+# ----------------- Chọn trọng số trực quan -----------------
+st.markdown("### ⚖️ Tùy chọn ưu tiên xếp hạng")
+st.markdown(
+    """
+    <div style='padding-bottom:8px;'>
+        <strong>🎯 Ưu tiên:</strong> <br>
+        <span style='color:gray;'>0 = Ưu tiên gần hơn &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;➡️ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;100 = Ưu tiên nhiều SKU hơn</span>
+    </div>
+    """, unsafe_allow_html=True
+)
+priority_sku = st.slider("", 0, 100, 60)
 
 # ----------------- Nút xử lý -----------------
 if st.button("🔍 Tìm cửa hàng phù hợp"):
@@ -71,22 +91,39 @@ if st.button("🔍 Tìm cửa hàng phù hợp"):
                         user_location = (row["Lat"], row["Lon"])
                         break
 
+                # Lọc theo ngân sách
                 df_sku_filtered = df_sku[(df_sku['Price'] >= min_price) & (df_sku['Price'] <= max_price)]
+
+                # Lọc theo bộ lọc
+                if selected_colors:
+                    df_sku_filtered = df_sku_filtered[df_sku_filtered["Color"].isin(selected_colors)]
+                if selected_types:
+                    df_sku_filtered = df_sku_filtered[df_sku_filtered["Type"].isin(selected_types)]
+                if selected_brands:
+                    df_sku_filtered = df_sku_filtered[df_sku_filtered["Brand"].isin(selected_brands)]
+                if selected_gender != "Tất cả":
+                    df_sku_filtered = df_sku_filtered[df_sku_filtered["Giới tính"] == selected_gender]
+
                 sku_count = df_sku_filtered.groupby("Cửa hàng").size().reset_index(name="SKU phù hợp")
                 df_merged = df_store.merge(sku_count, on="Cửa hàng", how="left").fillna(0)
                 df_merged["SKU phù hợp"] = df_merged["SKU phù hợp"].astype(int)
                 df_filtered = df_merged[df_merged["SKU phù hợp"] > 0].copy()
 
                 if df_filtered.empty:
-                    st.warning("⚠️ Không có cửa hàng nào có sản phẩm trong tầm giá bạn nhập.")
+                    st.warning("⚠️ Không có cửa hàng nào có sản phẩm phù hợp với tiêu chí của bạn.")
                 else:
                     df_filtered["Khoảng cách (km)"] = df_filtered.apply(
                         lambda row: geodesic(user_location, (row["Lat"], row["Lon"])).km, axis=1
                     )
                     df_filtered["score_distance"] = 1 / (1 + df_filtered["Khoảng cách (km)"])
                     df_filtered["score_sku"] = df_filtered["SKU phù hợp"] / df_filtered["SKU phù hợp"].max()
+
+                    sku_weight = priority_sku / 100
+                    distance_weight = 1 - sku_weight
+
                     df_filtered["Điểm tổng"] = (
-                        df_filtered["score_distance"] * 0.4 + df_filtered["score_sku"] * 0.6
+                        df_filtered["score_distance"] * distance_weight +
+                        df_filtered["score_sku"] * sku_weight
                     ).round(4)
 
                     best_store = df_filtered.sort_values("Điểm tổng", ascending=False).iloc[0]
@@ -95,8 +132,9 @@ if st.button("🔍 Tìm cửa hàng phù hợp"):
                              f"{best_store['Khoảng cách (km)']:.2f} km | "
                              f"Điểm ưu tiên: {best_store['Điểm tổng']}")
 
-                    st.markdown("### 🗺️ Heatmap ưu tiên cửa hàng")
-                    m = folium.Map(location=user_location, zoom_start=14)
+                    st.markdown("### 🌍 Heatmap ưu tiên cửa hàng")
+
+                    m = folium.Map(location=user_location, zoom_start=13)
                     folium.Marker(user_location, tooltip="📍 Vị trí của bạn", icon=folium.Icon(color='red')).add_to(m)
 
                     heat_data = [[row["Lat"], row["Lon"], row["Điểm tổng"]] for _, row in df_filtered.iterrows()]
@@ -105,17 +143,24 @@ if st.button("🔍 Tìm cửa hàng phù hợp"):
                     for _, row in df_filtered.iterrows():
                         folium.Marker(
                             location=(row["Lat"], row["Lon"]),
-                            tooltip=f"{row['Cửa hàng']} | SKU: {row['SKU phù hợp']} | Điểm: {row['Điểm tổng']}"
+                            tooltip=f"{row['Cửa hàng']} | SKU: {row['SKU phù hợp']} | Điểm: {row['Điểm tổng']}",
+                            popup=row["Cửa hàng"]
                         ).add_to(m)
 
-                    folium_static(m)
+                    map_html = m._repr_html_()
+                    st.components.v1.html(map_html, height=600, scrolling=True)
 
                     st.markdown("### 📋 Danh sách cửa hàng gợi ý")
-                    st.dataframe(
-                        df_filtered[["Cửa hàng", "SKU phù hợp", "Khoảng cách (km)", "Điểm tổng"]]
-                        .sort_values("Điểm tổng", ascending=False)
-                        .reset_index(drop=True)
-                    )
+                    styled_df = df_filtered[["Cửa hàng", "SKU phù hợp", "Khoảng cách (km)", "Điểm tổng"]].sort_values(
+                        "Điểm tổng", ascending=False
+                    ).reset_index(drop=True)
+
+                    styled_df = styled_df.style.set_table_styles([
+                        {'selector': 'th', 'props': [('text-align', 'center')]},
+                        {'selector': 'td', 'props': [('text-align', 'center')]}
+                    ]).set_properties(**{'text-align': 'center'})
+
+                    st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"❌ Lỗi khi xử lý: {e}")
