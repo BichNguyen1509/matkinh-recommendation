@@ -7,6 +7,7 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 import unicodedata
 import re
+from branca.colormap import LinearColormap  # <-- (2) dùng cho legend màu
 
 # ----------------- Load dữ liệu -----------------
 df_sku = pd.read_excel("Mắt Kính Data.xlsx", sheet_name="SKU")
@@ -112,6 +113,7 @@ if st.button("🔍 Tìm cửa hàng phù hợp"):
                 if df_filtered.empty:
                     st.warning("⚠️ Không có cửa hàng nào có sản phẩm phù hợp với tiêu chí của bạn.")
                 else:
+                    # Tính khoảng cách & điểm
                     df_filtered["Khoảng cách (km)"] = df_filtered.apply(
                         lambda row: geodesic(user_location, (row["Lat"], row["Lon"])).km, axis=1
                     )
@@ -128,18 +130,51 @@ if st.button("🔍 Tìm cửa hàng phù hợp"):
 
                     best_store = df_filtered.sort_values("Điểm tổng", ascending=False).iloc[0]
                     st.markdown("### 🏆 Cửa hàng nên ghé thăm:")
-                    st.write(f"**{best_store['Cửa hàng']}** — {best_store['SKU phù hợp']} SKU phù hợp | "
-                             f"{best_store['Khoảng cách (km)']:.2f} km | "
-                             f"Điểm ưu tiên: {best_store['Điểm tổng']}")
+                    st.write(
+                        f"**{best_store['Cửa hàng']}** — {best_store['SKU phù hợp']} SKU phù hợp | "
+                        f"{best_store['Khoảng cách (km)']:.2f} km | "
+                        f"Điểm ưu tiên: {best_store['Điểm tổng']}"
+                    )
 
+                    # (1) 📋 Danh sách cửa hàng gợi ý — ĐƯA LÊN TRƯỚC HEATMAP
+                    st.markdown("### 📋 Danh sách cửa hàng gợi ý")
+                    styled_df = df_filtered[["Cửa hàng", "SKU phù hợp", "Khoảng cách (km)", "Điểm tổng"]].sort_values(
+                        "Điểm tổng", ascending=False
+                    ).reset_index(drop=True)
+                    styled_df = styled_df.style.set_table_styles([
+                        {'selector': 'th', 'props': [('text-align', 'center')]},
+                        {'selector': 'td', 'props': [('text-align', 'center')]}
+                    ]).set_properties(**{'text-align': 'center'})
+                    st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
+
+                    # (2) 🌍 Heatmap ưu tiên cửa hàng + LEGEND MÀU TRÊN BẢN ĐỒ
                     st.markdown("### 🌍 Heatmap ưu tiên cửa hàng")
 
                     m = folium.Map(location=user_location, zoom_start=13)
                     folium.Marker(user_location, tooltip="📍 Vị trí của bạn", icon=folium.Icon(color='red')).add_to(m)
 
+                    # Chuẩn bị dữ liệu heatmap (điểm tổng đã nằm trong [0,1] nên dùng trực tiếp)
                     heat_data = [[row["Lat"], row["Lon"], row["Điểm tổng"]] for _, row in df_filtered.iterrows()]
-                    HeatMap(heat_data, radius=20).add_to(m)
 
+                    # Tùy chỉnh gradient để khớp với legend
+                    gradient = {
+                        0.0: 'blue',
+                        0.25: 'lime',
+                        0.5: 'yellow',
+                        0.75: 'orange',
+                        1.0: 'red'
+                    }
+
+                    HeatMap(
+                        heat_data,
+                        radius=20,
+                        gradient=gradient,
+                        min_opacity=0.3,
+                        max_opacity=0.9,
+                        blur=15
+                    ).add_to(m)
+
+                    # Thêm marker từng cửa hàng
                     for _, row in df_filtered.iterrows():
                         folium.Marker(
                             location=(row["Lat"], row["Lon"]),
@@ -147,20 +182,24 @@ if st.button("🔍 Tìm cửa hàng phù hợp"):
                             popup=row["Cửa hàng"]
                         ).add_to(m)
 
+                    # Thêm chú thích (legend) ngay TRÊN BẢN ĐỒ để giải thích ý nghĩa màu
+                    vmin = float(df_filtered["Điểm tổng"].min())
+                    vmax = float(df_filtered["Điểm tổng"].max())
+                    colormap = LinearColormap(
+                        colors=['blue', 'lime', 'yellow', 'orange', 'red'],
+                        vmin=vmin,
+                        vmax=vmax
+                    )
+                    colormap.caption = "Điểm ưu tiên (màu xanh = thấp, màu đỏ = cao)"
+                    colormap.add_to(m)
+
+                    # Gợi ý thêm mô tả bằng chữ cho người xem (rõ ràng hơn)
+                    st.caption("🔎 Chú thích: Heatmap hiển thị mức ưu tiên theo màu sắc — xanh/thấp → đỏ/cao. \
+Khoảng màu dựa trên 'Điểm tổng' từ cấu phần khoảng cách & số SKU phù hợp.")
+
+                    # Render map
                     map_html = m._repr_html_()
                     st.components.v1.html(map_html, height=600, scrolling=True)
-
-                    st.markdown("### 📋 Danh sách cửa hàng gợi ý")
-                    styled_df = df_filtered[["Cửa hàng", "SKU phù hợp", "Khoảng cách (km)", "Điểm tổng"]].sort_values(
-                        "Điểm tổng", ascending=False
-                    ).reset_index(drop=True)
-
-                    styled_df = styled_df.style.set_table_styles([
-                        {'selector': 'th', 'props': [('text-align', 'center')]},
-                        {'selector': 'td', 'props': [('text-align', 'center')]}
-                    ]).set_properties(**{'text-align': 'center'})
-
-                    st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"❌ Lỗi khi xử lý: {e}")
